@@ -10,7 +10,7 @@ pymongo
 
 # ML/Inference (optional, used by remote clients)
 transformers
-diffusers
+git+https://github.com/huggingface/diffusers.git
 accelerate
 safetensors
 sentencepiece
