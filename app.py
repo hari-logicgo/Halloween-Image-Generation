@@ -170,21 +170,24 @@ async def halloween_transform(
 # ----------------- GARMENT ENDPOINTS -----------------
 @app.post("/garment/transform")
 async def garment_transform(
-    source_filename: str = Form(...),
-    garment_filename: str = Form(...),
+    source_file: UploadFile = File(...),   # 👈 changed from filename to file upload
+    garment_filename: str = Form(...),     # still choosing garment from available list
     authorization: str = Header(None)
 ):
     verify_token(authorization)
-    
-    try:
-        source_path = os.path.join(GARMENT_INPUT_DIR, source_filename)
-        garment_path = os.path.join(GARMENT_INPUT_DIR, garment_filename)
 
-        if not os.path.exists(source_path):
-            raise HTTPException(status_code=404, detail="Source image not found.")
+    try:
+        # Save uploaded source image
+        unique_filename = f"{uuid.uuid4()}_{source_file.filename}"
+        source_path = os.path.join(GARMENT_INPUT_DIR, unique_filename)
+        with open(source_path, "wb") as buffer:
+            shutil.copyfileobj(source_file.file, buffer)
+
+        garment_path = os.path.join(GARMENT_INPUT_DIR, garment_filename)
         if not os.path.exists(garment_path):
             raise HTTPException(status_code=404, detail="Garment image not found.")
 
+        # Process with Gradio client
         output_image = process_garment_image(source_path, garment_path)
         output_filename = f"{uuid.uuid4()}.webp"
         output_path = os.path.join(GARMENT_OUTPUT_DIR, output_filename)
