@@ -59,7 +59,8 @@ async def lifespan(app: FastAPI):
     # Initialize Gradio clients with error handling
     try:
         logger.info("Initializing Gradio clients...")
-        HALLOWEEN_CLIENT = Client("LogicGoInfotechSpaces/Halloween_Image")
+        hf_token = os.getenv("HF_TOKEN")
+        HALLOWEEN_CLIENT = Client("https://logicgoinfotechspaces-halloween-image.hf.space",hf_token=hf_token if hf_token else None)
         logger.info("Halloween client initialized")
     except Exception as e:
         logger.error(f"Failed to initialize Halloween client: {e}")
