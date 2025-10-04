@@ -2,9 +2,7 @@ import os
 import uuid
 import shutil
 import requests
-import time
-from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Form, Request
+from fastapi import FastAPI, UploadFile, File, Header, HTTPException, Form
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from gradio_client import Client, handle_file
@@ -12,6 +10,7 @@ from PIL import Image
 from contextlib import asynccontextmanager
 import logging
 from pymongo import MongoClient
+from datetime import datetime
 
 # ----------------- LOGGING -----------------
 logging.basicConfig(level=logging.INFO)
@@ -20,15 +19,6 @@ logger = logging.getLogger(__name__)
 # ----------------- CONFIG -----------------
 API_TOKEN = os.getenv("API_TOKEN", "logicgo@123")
 BASE_DIR = os.path.dirname(__file__)
-
-# MongoDB setup
-MONGO_URI = os.getenv(
-    "MONGO_URI",
-    "mongodb+srv://harilogicgo_db_user:g6Zz4M2xWpr3B2VM@cluster0.bnzjt7f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-)
-mongo_client = MongoClient(MONGO_URI)
-mongo_db = mongo_client["health-compass"]
-logs_collection = mongo_db["api_logs"]
 
 # Directories
 HALLOWEEN_INPUT_DIR = os.path.join(BASE_DIR, "halloween_input")
@@ -46,30 +36,76 @@ GARMENT_URLS = {
     "skull_dress.jpg": "https://raw.githubusercontent.com/hari-logicgo/faceswap-api/main/skull-dress.jpg"
 }
 
-# Global clients
+# ----------------- MONGODB -----------------
+mongo_client = MongoClient("mongodb+srv://harilogicgo_db_user:g6Zz4M2xWpr3B2VM@cluster0.bnzjt7f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+db = mongo_client["image_transform_logs"]
+logs_collection = db["api_logs"]
+
+def log_to_mongo(endpoint: str, filename: str):
+    try:
+        log_entry = {
+            "endpoint": endpoint,
+            "filename": filename,
+            "timestamp": datetime.utcnow()
+        }
+        logs_collection.insert_one(log_entry)
+        logger.info(f"Logged {endpoint} call for {filename} to MongoDB.")
+    except Exception as e:
+        logger.error(f"Failed to log {endpoint} call to MongoDB: {e}")
+
+# ----------------- GLOBAL CLIENTS -----------------
 HALLOWEEN_CLIENT = None
 GARMENT_CLIENT = None
+
+# ----------------- LIFESPAN -----------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global HALLOWEEN_CLIENT, GARMENT_CLIENT
+    
+    logger.info("Startup: downloading garment images if needed...")
+    for filename, url in GARMENT_URLS.items():
+        dest_path = os.path.join(GARMENT_INPUT_DIR, filename)
+        if not os.path.exists(dest_path):
+            try:
+                resp = requests.get(url, timeout=30)
+                resp.raise_for_status()
+                with open(dest_path, "wb") as f:
+                    f.write(resp.content)
+                logger.info(f"Downloaded {filename}")
+            except Exception as e:
+                logger.error(f"Failed to download {filename} from {url}: {e}")
+    
+    # Initialize Gradio clients
+    try:
+        hf_token = os.getenv("HF_TOKEN")
+        HALLOWEEN_CLIENT = Client("https://logicgoinfotechspaces-halloween-image.hf.space", hf_token=hf_token if hf_token else None)
+        logger.info("Halloween client initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize Halloween client: {e}")
+    
+    try:
+        GARMENT_CLIENT = Client("franciszzj/Leffa")
+        logger.info("Garment client initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize Garment client: {e}")
+    
+    logger.info("Startup complete.")
+    yield
+    logger.info("Shutdown complete.")
+
+# ----------------- FASTAPI APP -----------------
+app = FastAPI(title="Combined Halloween + Virtual Try-On API", lifespan=lifespan)
+
+# Mount static directories
+app.mount("/halloween_input", StaticFiles(directory=HALLOWEEN_INPUT_DIR), name="halloween_input")
+app.mount("/halloween_output", StaticFiles(directory=HALLOWEEN_OUTPUT_DIR), name="halloween_output")
+app.mount("/garment_input", StaticFiles(directory=GARMENT_INPUT_DIR), name="garment_input")
+app.mount("/garment_output", StaticFiles(directory=GARMENT_OUTPUT_DIR), name="garment_output")
 
 # ----------------- HELPERS -----------------
 def verify_token(auth_header: str):
     if not auth_header or auth_header != f"Bearer {API_TOKEN}":
         raise HTTPException(status_code=401, detail="Unauthorized. Invalid or missing token.")
-
-def log_api_hit(endpoint: str, input_file: str, output_file: str, output_url: str, request: Request, auth_header: str):
-    """Store API hit logs into MongoDB with timestamp and client info"""
-    try:
-        client_host = request.client.host if request.client else "unknown"
-        logs_collection.insert_one({
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "endpoint": endpoint,
-            "input_file": input_file,
-            "output_file": output_file,
-            "output_url": output_url,
-            "client_ip": client_host,
-            "auth_header": auth_header
-        })
-    except Exception as e:
-        logger.error(f"Mongo log insert failed: {e}")
 
 def process_garment_image(source_path, garment_path):
     if GARMENT_CLIENT is None:
@@ -112,47 +148,7 @@ def process_halloween_image(input_path, prompt):
         logger.error(f"Error processing halloween image: {e}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
-# ----------------- LIFESPAN -----------------
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global HALLOWEEN_CLIENT, GARMENT_CLIENT
-    logger.info("Startup: downloading garment images if needed...")
-    for filename, url in GARMENT_URLS.items():
-        dest_path = os.path.join(GARMENT_INPUT_DIR, filename)
-        if not os.path.exists(dest_path):
-            try:
-                resp = requests.get(url, timeout=30)
-                resp.raise_for_status()
-                with open(dest_path, "wb") as f:
-                    f.write(resp.content)
-                logger.info(f"Downloaded {filename}")
-            except Exception as e:
-                logger.error(f"Failed to download {filename} from {url}: {e}")
-    # Initialize clients
-    try:
-        hf_token = os.getenv("HF_TOKEN")
-        HALLOWEEN_CLIENT = Client("https://logicgoinfotechspaces-halloween-image.hf.space", hf_token=hf_token if hf_token else None)
-        logger.info("Halloween client initialized")
-    except Exception as e:
-        logger.error(f"Failed to initialize Halloween client: {e}")
-    try:
-        GARMENT_CLIENT = Client("franciszzj/Leffa")
-        logger.info("Garment client initialized")
-    except Exception as e:
-        logger.error(f"Failed to initialize Garment client: {e}")
-    yield
-    logger.info("Shutdown complete.")
-
-# ----------------- FASTAPI APP -----------------
-app = FastAPI(title="Combined Halloween + Virtual Try-On API", lifespan=lifespan)
-
-# Static mounts
-app.mount("/halloween_input", StaticFiles(directory=HALLOWEEN_INPUT_DIR), name="halloween_input")
-app.mount("/halloween_output", StaticFiles(directory=HALLOWEEN_OUTPUT_DIR), name="halloween_output")
-app.mount("/garment_input", StaticFiles(directory=GARMENT_INPUT_DIR), name="garment_input")
-app.mount("/garment_output", StaticFiles(directory=GARMENT_OUTPUT_DIR), name="garment_output")
-
-# ----------------- ENDPOINTS -----------------
+# ----------------- HEALTH CHECK -----------------
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "services": {
@@ -160,9 +156,9 @@ async def health_check():
         "garment": GARMENT_CLIENT is not None
     }}
 
+# ----------------- HALLOWEEN ENDPOINTS -----------------
 @app.post("/halloween/transform")
 async def halloween_transform(
-    request: Request,
     file: UploadFile = File(...),
     prompt: str = "Make the person look like a vampire with pale skin, glowing red eyes, sharp fangs, and dark gothic makeup. Add a spooky background with bats.",
     authorization: str = Header(None)
@@ -173,13 +169,14 @@ async def halloween_transform(
         upload_path = os.path.join(HALLOWEEN_INPUT_DIR, unique_filename)
         with open(upload_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+
         output_image = process_halloween_image(upload_path, prompt)
         output_filename = f"{uuid.uuid4()}.webp"
         output_path = os.path.join(HALLOWEEN_OUTPUT_DIR, output_filename)
         output_image.save(output_path)
 
-        # ✅ Mongo log
-        log_api_hit("halloween", unique_filename, output_filename, f"/halloween_output/{output_filename}", request, authorization)
+        # --- MongoDB Logging ---
+        log_to_mongo("/halloween/transform", output_filename)
 
         return JSONResponse({
             "status": "success",
@@ -189,9 +186,9 @@ async def halloween_transform(
         logger.error(f"Halloween transform error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ----------------- GARMENT ENDPOINTS -----------------
 @app.post("/garment/transform")
 async def garment_transform(
-    request: Request,
     source_file: UploadFile = File(...),
     garment_filename: str = Form(...),
     authorization: str = Header(None)
@@ -202,6 +199,7 @@ async def garment_transform(
         source_path = os.path.join(GARMENT_INPUT_DIR, unique_filename)
         with open(source_path, "wb") as buffer:
             shutil.copyfileobj(source_file.file, buffer)
+
         garment_path = os.path.join(GARMENT_INPUT_DIR, garment_filename)
         if not os.path.exists(garment_path):
             raise HTTPException(status_code=404, detail="Garment image not found.")
@@ -211,8 +209,8 @@ async def garment_transform(
         output_path = os.path.join(GARMENT_OUTPUT_DIR, output_filename)
         output_image.save(output_path)
 
-        # ✅ Mongo log
-        log_api_hit("garment", unique_filename, output_filename, f"/garment_output/{output_filename}", request, authorization)
+        # --- MongoDB Logging ---
+        log_to_mongo("/garment/transform", output_filename)
 
         return JSONResponse({
             "status": "success",
@@ -248,7 +246,7 @@ async def download_garment(filename: str):
         raise HTTPException(status_code=404, detail="File not found.")
     return FileResponse(file_path, media_type="application/octet-stream", filename=filename)
 
-# ----------------- MAIN -----------------
+# ----------------- RUN APP -----------------
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
