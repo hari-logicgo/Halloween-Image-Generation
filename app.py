@@ -23,10 +23,11 @@ BASE_DIR = os.path.dirname(__file__)
 # Directories
 HALLOWEEN_INPUT_DIR = os.path.join(BASE_DIR, "halloween_input")
 HALLOWEEN_OUTPUT_DIR = os.path.join(BASE_DIR, "halloween_output")
-GARMENT_INPUT_DIR = os.path.join(BASE_DIR, "garment_input")
-GARMENT_OUTPUT_DIR = os.path.join(BASE_DIR, "garment_output")
+GARMENT_TEMPLATE_DIR = os.path.join(BASE_DIR, "garment_templates")   # ✅ only template garments
+GARMENT_UPLOAD_DIR = os.path.join(BASE_DIR, "garment_input")         # ✅ user uploads
+GARMENT_OUTPUT_DIR = os.path.join(BASE_DIR, "garment_output")        # ✅ generated outputs
 
-for d in [HALLOWEEN_INPUT_DIR, HALLOWEEN_OUTPUT_DIR, GARMENT_INPUT_DIR, GARMENT_OUTPUT_DIR]:
+for d in [HALLOWEEN_INPUT_DIR, HALLOWEEN_OUTPUT_DIR, GARMENT_TEMPLATE_DIR, GARMENT_UPLOAD_DIR, GARMENT_OUTPUT_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # Predefined garment URLs
@@ -61,10 +62,10 @@ GARMENT_CLIENT = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global HALLOWEEN_CLIENT, GARMENT_CLIENT
-    
-    logger.info("Startup: downloading garment images if needed...")
+
+    logger.info("Startup: downloading garment templates if needed...")
     for filename, url in GARMENT_URLS.items():
-        dest_path = os.path.join(GARMENT_INPUT_DIR, filename)
+        dest_path = os.path.join(GARMENT_TEMPLATE_DIR, filename)
         if not os.path.exists(dest_path):
             try:
                 resp = requests.get(url, timeout=30)
@@ -74,7 +75,7 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Downloaded {filename}")
             except Exception as e:
                 logger.error(f"Failed to download {filename} from {url}: {e}")
-    
+
     # Initialize Gradio clients
     try:
         hf_token = os.getenv("HF_TOKEN")
@@ -82,13 +83,13 @@ async def lifespan(app: FastAPI):
         logger.info("Halloween client initialized")
     except Exception as e:
         logger.error(f"Failed to initialize Halloween client: {e}")
-    
+
     try:
         GARMENT_CLIENT = Client("franciszzj/Leffa")
         logger.info("Garment client initialized")
     except Exception as e:
         logger.error(f"Failed to initialize Garment client: {e}")
-    
+
     logger.info("Startup complete.")
     yield
     logger.info("Shutdown complete.")
@@ -99,7 +100,8 @@ app = FastAPI(title="Combined Halloween + Virtual Try-On API", lifespan=lifespan
 # Mount static directories
 app.mount("/halloween_input", StaticFiles(directory=HALLOWEEN_INPUT_DIR), name="halloween_input")
 app.mount("/halloween_output", StaticFiles(directory=HALLOWEEN_OUTPUT_DIR), name="halloween_output")
-app.mount("/garment_input", StaticFiles(directory=GARMENT_INPUT_DIR), name="garment_input")
+app.mount("/garment_templates", StaticFiles(directory=GARMENT_TEMPLATE_DIR), name="garment_templates")
+app.mount("/garment_input", StaticFiles(directory=GARMENT_UPLOAD_DIR), name="garment_input")
 app.mount("/garment_output", StaticFiles(directory=GARMENT_OUTPUT_DIR), name="garment_output")
 
 # ----------------- HELPERS -----------------
@@ -175,7 +177,6 @@ async def halloween_transform(
         output_path = os.path.join(HALLOWEEN_OUTPUT_DIR, output_filename)
         output_image.save(output_path)
 
-        # --- MongoDB Logging ---
         log_to_mongo("/halloween/transform", output_filename)
 
         return JSONResponse({
@@ -195,21 +196,21 @@ async def garment_transform(
 ):
     verify_token(authorization)
     try:
+        # ✅ Save user-uploaded source to UPLOAD DIR, not template dir
         unique_filename = f"{uuid.uuid4()}_{source_file.filename}"
-        source_path = os.path.join(GARMENT_INPUT_DIR, unique_filename)
+        source_path = os.path.join(GARMENT_UPLOAD_DIR, unique_filename)
         with open(source_path, "wb") as buffer:
             shutil.copyfileobj(source_file.file, buffer)
 
-        garment_path = os.path.join(GARMENT_INPUT_DIR, garment_filename)
+        garment_path = os.path.join(GARMENT_TEMPLATE_DIR, garment_filename)
         if not os.path.exists(garment_path):
-            raise HTTPException(status_code=404, detail="Garment image not found.")
+            raise HTTPException(status_code=404, detail="Garment template not found.")
 
         output_image = process_garment_image(source_path, garment_path)
         output_filename = f"{uuid.uuid4()}.webp"
         output_path = os.path.join(GARMENT_OUTPUT_DIR, output_filename)
         output_image.save(output_path)
 
-        # --- MongoDB Logging ---
         log_to_mongo("/garment/transform", output_filename)
 
         return JSONResponse({
@@ -224,9 +225,9 @@ async def garment_transform(
 @app.get("/garment/list")
 async def list_garments():
     try:
-        garments = os.listdir(GARMENT_INPUT_DIR)
+        garments = os.listdir(GARMENT_TEMPLATE_DIR)
         return JSONResponse({
-            "garments": [{"filename": g, "url": f"/garment_input/{g}"} for g in garments]
+            "garments": [{"filename": g, "url": f"/garment_templates/{g}"} for g in garments]
         })
     except Exception as e:
         logger.error(f"List garments error: {e}")
