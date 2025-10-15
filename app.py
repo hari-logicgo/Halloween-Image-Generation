@@ -23,7 +23,8 @@ BASE_DIR = os.path.dirname(__file__)
 # Directories
 HALLOWEEN_INPUT_DIR = os.path.join(BASE_DIR, "halloween_input")
 HALLOWEEN_OUTPUT_DIR = os.path.join(BASE_DIR, "halloween_output")
-GARMENT_TEMPLATE_DIR = os.path.join(BASE_DIR, "garment_templates")   # ✅ only template garments
+# Point garment templates to the user's "Halloween Dress" folder
+GARMENT_TEMPLATE_DIR = os.path.join(BASE_DIR, "Halloween Dress")   # ✅ only template garments
 GARMENT_UPLOAD_DIR = os.path.join(BASE_DIR, "garment_input")         # ✅ user uploads
 GARMENT_OUTPUT_DIR = os.path.join(BASE_DIR, "garment_output")        # ✅ generated outputs
 
@@ -227,12 +228,22 @@ async def garment_transform(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/garment/list")
-async def list_garments():
+async def list_garments(limit: int = 10):
     try:
-        garments = os.listdir(GARMENT_TEMPLATE_DIR)
-        return JSONResponse({
-            "garments": [{"filename": g, "url": f"/garment_templates/{g}"} for g in garments]
-        })
+        allowed_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        if not os.path.exists(GARMENT_TEMPLATE_DIR):
+            return JSONResponse({"garments": []})
+
+        all_entries = sorted(os.listdir(GARMENT_TEMPLATE_DIR))
+        garments = []
+        for entry in all_entries:
+            _, ext = os.path.splitext(entry)
+            if ext.lower() in allowed_exts:
+                garments.append({"filename": entry, "url": f"/garment_templates/{entry}"})
+            if len(garments) >= max(0, limit):
+                break
+
+        return JSONResponse({"garments": garments})
     except Exception as e:
         logger.error("List garments error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
