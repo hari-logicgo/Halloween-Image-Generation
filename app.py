@@ -23,7 +23,8 @@ BASE_DIR = os.path.dirname(__file__)
 # Directories
 HALLOWEEN_INPUT_DIR = os.path.join(BASE_DIR, "halloween_input")
 HALLOWEEN_OUTPUT_DIR = os.path.join(BASE_DIR, "halloween_output")
-GARMENT_TEMPLATE_DIR = os.path.join(BASE_DIR, "garment_templates")   # ✅ only template garments
+# Point garment templates to the user's "Halloween Dress" folder
+GARMENT_TEMPLATE_DIR = os.path.join(BASE_DIR, "Halloween Dress")   # ✅ only template garments
 GARMENT_UPLOAD_DIR = os.path.join(BASE_DIR, "garment_input")         # ✅ user uploads
 GARMENT_OUTPUT_DIR = os.path.join(BASE_DIR, "garment_output")        # ✅ generated outputs
 
@@ -38,7 +39,11 @@ GARMENT_URLS = {
 }
 
 # ----------------- MONGODB -----------------
-mongo_client = MongoClient("mongodb+srv://harilogicgo_db_user:g6Zz4M2xWpr3B2VM@cluster0.bnzjt7f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+MONGODB_URI = os.getenv(
+    "MONGODB_URI",
+    "mongodb+srv://harilogicgo_db_user:g6Zz4M2xWpr3B2VM@cluster0.bnzjt7f.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
+)
+mongo_client = MongoClient(MONGODB_URI)
 db = mongo_client["image_transform_logs"]
 logs_collection = db["api_logs"]
 
@@ -50,9 +55,9 @@ def log_to_mongo(endpoint: str, filename: str):
             "timestamp": datetime.utcnow()
         }
         logs_collection.insert_one(log_entry)
-        logger.info(f"Logged {endpoint} call for {filename} to MongoDB.")
+        logger.info("Logged %s call for %s to MongoDB.", endpoint, filename)
     except Exception as e:
-        logger.error(f"Failed to log {endpoint} call to MongoDB: {e}")
+        logger.error("Failed to log %s call to MongoDB: %s", endpoint, e)
 
 # ----------------- GLOBAL CLIENTS -----------------
 HALLOWEEN_CLIENT = None
@@ -72,9 +77,9 @@ async def lifespan(app: FastAPI):
                 resp.raise_for_status()
                 with open(dest_path, "wb") as f:
                     f.write(resp.content)
-                logger.info(f"Downloaded {filename}")
+                logger.info("Downloaded %s", filename)
             except Exception as e:
-                logger.error(f"Failed to download {filename} from {url}: {e}")
+                logger.error("Failed to download %s from %s: %s", filename, url, e)
 
     # Initialize Gradio clients
     try:
@@ -82,13 +87,13 @@ async def lifespan(app: FastAPI):
         HALLOWEEN_CLIENT = Client("https://logicgoinfotechspaces-halloween-image.hf.space", hf_token=hf_token if hf_token else None)
         logger.info("Halloween client initialized")
     except Exception as e:
-        logger.error(f"Failed to initialize Halloween client: {e}")
+        logger.error("Failed to initialize Halloween client: %s", e)
 
     try:
         GARMENT_CLIENT = Client("franciszzj/Leffa")
         logger.info("Garment client initialized")
     except Exception as e:
-        logger.error(f"Failed to initialize Garment client: {e}")
+        logger.error("Failed to initialize Garment client: %s", e)
 
     logger.info("Startup complete.")
     yield
@@ -128,7 +133,7 @@ def process_garment_image(source_path, garment_path):
         generated_image_path = result[0]
         return Image.open(generated_image_path)
     except Exception as e:
-        logger.error(f"Error processing garment image: {e}")
+        logger.error("Error processing garment image: %s", e)
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
 def process_halloween_image(input_path, prompt):
@@ -147,7 +152,7 @@ def process_halloween_image(input_path, prompt):
         image_path = result[0]
         return Image.open(image_path)
     except Exception as e:
-        logger.error(f"Error processing halloween image: {e}")
+        logger.error("Error processing halloween image: %s", e)
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
 # ----------------- HEALTH CHECK -----------------
@@ -184,7 +189,7 @@ async def halloween_transform(
             "url": f"/halloween_output/{output_filename}"
         })
     except Exception as e:
-        logger.error(f"Halloween transform error: {e}")
+        logger.error("Halloween transform error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 # ----------------- GARMENT ENDPOINTS -----------------
@@ -219,19 +224,34 @@ async def garment_transform(
             "filename": output_filename
         })
     except Exception as e:
-        logger.error(f"Garment transform error: {e}")
+        logger.error("Garment transform error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/garment/list")
-async def list_garments():
+async def list_garments(limit: int = 10):
     try:
-        garments = os.listdir(GARMENT_TEMPLATE_DIR)
-        return JSONResponse({
-            "garments": [{"filename": g, "url": f"/garment_templates/{g}"} for g in garments]
-        })
+        allowed_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+        if not os.path.exists(GARMENT_TEMPLATE_DIR):
+            return JSONResponse({"garments": []})
+
+        all_entries = sorted(os.listdir(GARMENT_TEMPLATE_DIR))
+        garments = []
+        for entry in all_entries:
+            _, ext = os.path.splitext(entry)
+            if ext.lower() in allowed_exts:
+                garments.append({"filename": entry, "url": f"/garment_templates/{entry}"})
+            if len(garments) >= max(0, limit):
+                break
+
+        return JSONResponse({"garments": garments})
     except Exception as e:
-        logger.error(f"List garments error: {e}")
+        logger.error("List garments error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+# ----------------- ROOT -----------------
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Halloween + Garment API", "docs": "/docs"}
 
 @app.get("/preview/garment/{filename}")
 async def preview_garment(filename: str):

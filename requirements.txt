@@ -7,3 +7,10 @@ numpy>=1.24.0,<2.0.0
 opencv-python-headless>=4.8.0
 requests>=2.31.0
 pymongo
+
+# ML/Inference (optional, used by remote clients)
+transformers
+git+https://github.com/huggingface/diffusers.git
+accelerate
+safetensors
+sentencepiece
