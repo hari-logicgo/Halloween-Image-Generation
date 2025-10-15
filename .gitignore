@@ -1,0 +1,22 @@
+# Generated and downloaded assets
+halloween_input/
+halloween_output/
+garment_input/
+garment_output/
+garment_templates/
+Halloween Dress/
+
+# Local tooling/history
+.history/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+ENV/
+.env
+.env.local
+
