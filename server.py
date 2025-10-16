@@ -4,6 +4,7 @@ from typing import List, Dict
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 
 app = FastAPI(title="Halloween Image API - Filesystem Mode")
@@ -13,6 +14,10 @@ BASE_DIR = Path(__file__).resolve().parent
 GARMENT_TEMPLATES_DIR = BASE_DIR / "Halloween Dress"
 GARMENT_INPUT_DIR = BASE_DIR / "garment_input"
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+
+# Mount static directories
+app.mount("/garment_templates", StaticFiles(directory=str(GARMENT_TEMPLATES_DIR)), name="garment_templates")
+app.mount("/garment_input", StaticFiles(directory=str(GARMENT_INPUT_DIR)), name="garment_input")
 
 
 def list_folder_images(directory: Path) -> List[Dict[str, str]]:
@@ -30,11 +35,11 @@ def health() -> Dict[str, object]:
 
 
 @app.get("/garment/list")
-def garment_list() -> Dict[str, List[Dict[str, str]]]:
+def garment_list(limit: int = 10) -> Dict[str, List[Dict[str, str]]]:
     items: List[Dict[str, str]] = []
     items.extend(list_folder_images(GARMENT_TEMPLATES_DIR))
     items.extend(list_folder_images(GARMENT_INPUT_DIR))
-    return {"garments": items}
+    return {"garments": items[:limit]}
 
 
 @app.get("/preview/garment/{filename}")

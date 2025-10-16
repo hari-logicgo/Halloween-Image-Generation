@@ -3,14 +3,8 @@ uvicorn[standard]==0.23.2
 python-multipart>=0.0.7
 gradio_client==1.8.0
 Pillow>=10.0.0
-numpy>=1.24.0,<2.0.0
-opencv-python-headless>=4.8.0
+numpy==1.26.4
 requests>=2.31.0
 pymongo
-
-# ML/Inference (optional, used by remote clients)
-transformers
-git+https://github.com/huggingface/diffusers.git
-accelerate
-safetensors
-sentencepiece
+# optional; remove if flaky/slow:
+# opencv-python-headless==4.11.0.86
