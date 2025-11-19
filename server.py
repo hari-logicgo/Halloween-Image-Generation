@@ -6,32 +6,64 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-
 app = FastAPI(title="Halloween Image API - Filesystem Mode")
 
-
+# Base directory
 BASE_DIR = Path(__file__).resolve().parent
+
+# Directories (spaces fixed)
 GARMENT_TEMPLATES_DIR = BASE_DIR / "Halloween Dress"
 GARMENT_INPUT_DIR = BASE_DIR / "garment_input"
+
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
-# Mount static directories
-app.mount("/garment_templates", StaticFiles(directory=str(GARMENT_TEMPLATES_DIR)), name="garment_templates")
-app.mount("/garment_input", StaticFiles(directory=str(GARMENT_INPUT_DIR)), name="garment_input")
+# -----------------------------------------
+# Ensure directories exist (avoids crashes)
+# -----------------------------------------
+GARMENT_TEMPLATES_DIR.mkdir(exist_ok=True)
+GARMENT_INPUT_DIR.mkdir(exist_ok=True)
+
+# -----------------------------------------
+# Safe mount: only mount folder if it exists
+# -----------------------------------------
+if GARMENT_TEMPLATES_DIR.exists():
+    app.mount(
+        "/garment_templates",
+        StaticFiles(directory=str(GARMENT_TEMPLATES_DIR)),
+        name="garment_templates"
+    )
+
+if GARMENT_INPUT_DIR.exists():
+    app.mount(
+        "/garment_input",
+        StaticFiles(directory=str(GARMENT_INPUT_DIR)),
+        name="garment_input"
+    )
 
 
+# Helper to list images
 def list_folder_images(directory: Path) -> List[Dict[str, str]]:
     items: List[Dict[str, str]] = []
+
     if directory.exists():
         for p in sorted(directory.iterdir()):
             if p.is_file() and p.suffix.lower() in ALLOWED_EXTS:
-                items.append({"filename": p.name, "url": f"/garment_templates/{p.name}"})
+                items.append({
+                    "filename": p.name,
+                    "url": f"/garment_templates/{p.name}"
+                })
+
     return items
 
 
 @app.get("/health")
 def health() -> Dict[str, object]:
-    return {"status": "healthy", "source": "filesystem"}
+    return {
+        "status": "healthy",
+        "source": "filesystem",
+        "templates_exists": GARMENT_TEMPLATES_DIR.exists(),
+        "input_exists": GARMENT_INPUT_DIR.exists(),
+    }
 
 
 @app.get("/garment/list")
@@ -48,6 +80,5 @@ def preview_garment(filename: str):
         candidate = directory / filename
         if candidate.exists():
             return FileResponse(candidate)
+
     raise HTTPException(status_code=404, detail="File not found")
-
-
