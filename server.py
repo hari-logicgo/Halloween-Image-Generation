@@ -97,14 +97,15 @@ async def garment_transform(
     sourceFile: UploadFile = File(...),
     garment_filename: str = Form(...)
 ):
-    # Read file content
     file_content = await sourceFile.read()
-    
-    # Prepare files and data for the HF API
-    files = {"source": (sourceFile.filename, file_content, sourceFile.content_type)}
-    data = {"target": garment_filename}
 
-    # Async call to Hugging Face API with longer timeout
+    files = {
+        "source": (sourceFile.filename, file_content, sourceFile.content_type)
+    }
+    data = {
+        "target": garment_filename
+    }
+
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(
             HF_API_URL,
@@ -113,12 +114,38 @@ async def garment_transform(
             data=data
         )
 
-    # Forward the response content and status code
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        media_type=resp.headers.get("Content-Type")
+    if resp.status_code != 200:
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            media_type=resp.headers.get("Content-Type")
+        )
+
+    # ✅ HF RETURNS JSON WITH preview_url & filename
+    hf_data = resp.json()
+    filename = hf_data["filename"]
+
+    # ✅ DOWNLOAD IMAGE FROM HF
+    hf_image_url = (
+        "https://logicgoinfotechspaces-halloweenfaceswap.hf.space"
+        + hf_data["preview_url"]
     )
+
+    async with httpx.AsyncClient() as client:
+        img_resp = await client.get(hf_image_url)
+
+    # ✅ SAVE LOCALLY SO /preview WORKS
+    local_path = GARMENT_INPUT_DIR / filename
+    with open(local_path, "wb") as f:
+        f.write(img_resp.content)
+
+    # ✅ RETURN SAME FORMAT YOU WANT
+    return {
+        "status": "success",
+        "preview_url": f"/preview/garment/{filename}",
+        "filename": filename
+    }
+
 
 # import os
 # from pathlib import Path
