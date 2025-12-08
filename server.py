@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi import UploadFile, File, Form
-import requests
+import httpx
 
 app = FastAPI(title="Halloween Image API - Filesystem Mode")
 
@@ -87,7 +87,7 @@ def preview_garment(filename: str):
 
 
 # -------------------------------
-# NEW: POST /garment/transform
+# NEW: POST /garment/transform (async)
 # -------------------------------
 HF_API_URL = "https://logicgoinfotechspaces-halloweenfaceswap.hf.space/face-swap"
 HF_AUTH = "Bearer logicgo@123"
@@ -103,20 +103,21 @@ async def garment_transform(
     # Prepare files and data for the HF API
     files = {"source": (source_file.filename, file_content, source_file.content_type)}
     data = {"target": garment_filename}
-    
-    # Call the Hugging Face face-swap API
-    response = requests.post(
-        HF_API_URL,
-        headers={"Authorization": HF_AUTH},
-        files=files,
-        data=data
-    )
+
+    # Async call to Hugging Face API with longer timeout
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            HF_API_URL,
+            headers={"Authorization": HF_AUTH},
+            files=files,
+            data=data
+        )
 
     # Forward the response content and status code
     return Response(
-        content=response.content,
-        status_code=response.status_code,
-        media_type=response.headers.get("Content-Type")
+        content=resp.content,
+        status_code=resp.status_code,
+        media_type=resp.headers.get("Content-Type")
     )
 
 # import os
