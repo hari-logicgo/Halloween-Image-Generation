@@ -94,14 +94,14 @@ HF_AUTH = "Bearer logicgo@123"
 
 @app.post("/garment/transform")
 async def garment_transform(
-    source_file: UploadFile = File(...),
+    sourceFile: UploadFile = File(...),
     garment_filename: str = Form(...)
 ):
     # Read file content
     file_content = await source_file.read()
     
     # Prepare files and data for the HF API
-    files = {"source": (source_file.filename, file_content, source_file.content_type)}
+    files = {"source": (sourceFile.filename, file_content, source_file.content_type)}
     data = {"target": garment_filename}
 
     # Async call to Hugging Face API with longer timeout
