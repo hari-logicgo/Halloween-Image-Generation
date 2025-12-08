@@ -3,8 +3,10 @@ from pathlib import Path
 from typing import List, Dict
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi import UploadFile, File, Form
+import requests
 
 app = FastAPI(title="Halloween Image API - Filesystem Mode")
 
@@ -82,3 +84,126 @@ def preview_garment(filename: str):
             return FileResponse(candidate)
 
     raise HTTPException(status_code=404, detail="File not found")
+
+
+# -------------------------------
+# NEW: POST /garment/transform
+# -------------------------------
+HF_API_URL = "https://logicgoinfotechspaces-halloweenfaceswap.hf.space/face-swap"
+HF_AUTH = "Bearer logicgo@123"
+
+@app.post("/garment/transform")
+async def garment_transform(
+    source_file: UploadFile = File(...),
+    garment_filename: str = Form(...)
+):
+    # Read file content
+    file_content = await source_file.read()
+    
+    # Prepare files and data for the HF API
+    files = {"source": (source_file.filename, file_content, source_file.content_type)}
+    data = {"target": garment_filename}
+    
+    # Call the Hugging Face face-swap API
+    response = requests.post(
+        HF_API_URL,
+        headers={"Authorization": HF_AUTH},
+        files=files,
+        data=data
+    )
+
+    # Forward the response content and status code
+    return Response(
+        content=response.content,
+        status_code=response.status_code,
+        media_type=response.headers.get("Content-Type")
+    )
+
+# import os
+# from pathlib import Path
+# from typing import List, Dict
+
+# from fastapi import FastAPI, HTTPException
+# from fastapi.responses import FileResponse
+# from fastapi.staticfiles import StaticFiles
+# from fastapi import UploadFile, File, Form
+# import requests
+# from fastapi.responses import Response
+
+
+# app = FastAPI(title="Halloween Image API - Filesystem Mode")
+
+# # Base directory
+# BASE_DIR = Path(__file__).resolve().parent
+
+# # Directories (spaces fixed)
+# GARMENT_TEMPLATES_DIR = BASE_DIR / "Halloween Dress"
+# GARMENT_INPUT_DIR = BASE_DIR / "garment_input"
+
+# ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+
+# # -----------------------------------------
+# # Ensure directories exist (avoids crashes)
+# # -----------------------------------------
+# GARMENT_TEMPLATES_DIR.mkdir(exist_ok=True)
+# GARMENT_INPUT_DIR.mkdir(exist_ok=True)
+
+# # -----------------------------------------
+# # Safe mount: only mount folder if it exists
+# # -----------------------------------------
+# if GARMENT_TEMPLATES_DIR.exists():
+#     app.mount(
+#         "/garment_templates",
+#         StaticFiles(directory=str(GARMENT_TEMPLATES_DIR)),
+#         name="garment_templates"
+#     )
+
+# if GARMENT_INPUT_DIR.exists():
+#     app.mount(
+#         "/garment_input",
+#         StaticFiles(directory=str(GARMENT_INPUT_DIR)),
+#         name="garment_input"
+#     )
+
+
+# # Helper to list images
+# def list_folder_images(directory: Path) -> List[Dict[str, str]]:
+#     items: List[Dict[str, str]] = []
+
+#     if directory.exists():
+#         for p in sorted(directory.iterdir()):
+#             if p.is_file() and p.suffix.lower() in ALLOWED_EXTS:
+#                 items.append({
+#                     "filename": p.name,
+#                     "url": f"/garment_templates/{p.name}"
+#                 })
+
+#     return items
+
+
+# @app.get("/health")
+# def health() -> Dict[str, object]:
+#     return {
+#         "status": "healthy",
+#         "source": "filesystem",
+#         "templates_exists": GARMENT_TEMPLATES_DIR.exists(),
+#         "input_exists": GARMENT_INPUT_DIR.exists(),
+#     }
+
+
+# @app.get("/garment/list")
+# def garment_list(limit: int = 10) -> Dict[str, List[Dict[str, str]]]:
+#     items: List[Dict[str, str]] = []
+#     items.extend(list_folder_images(GARMENT_TEMPLATES_DIR))
+#     items.extend(list_folder_images(GARMENT_INPUT_DIR))
+#     return {"garments": items[:limit]}
+
+
+# @app.get("/preview/garment/{filename}")
+# def preview_garment(filename: str):
+#     for directory in (GARMENT_TEMPLATES_DIR, GARMENT_INPUT_DIR):
+#         candidate = directory / filename
+#         if candidate.exists():
+#             return FileResponse(candidate)
+
+#     raise HTTPException(status_code=404, detail="File not found")
