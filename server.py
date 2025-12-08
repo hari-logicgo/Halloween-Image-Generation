@@ -98,7 +98,7 @@ async def garment_transform(
     garment_filename: str = Form(...)
 ):
     # Read file content
-    file_content = await source_file.read()
+    file_content = await sourceFile.read()
     
     # Prepare files and data for the HF API
     files = {"source": (sourceFile.filename, file_content, sourceFile.content_type)}
