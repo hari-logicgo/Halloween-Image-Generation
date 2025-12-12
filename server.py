@@ -62,7 +62,40 @@ except Exception as e:
     _mongo_client = None
     _subcategories_col = None
     _media_clicks_col = None
+# --- NEW: REMOTE DOWNLOAD HELPER ---
+async def download_remote_asset(url: str, directory: Path) -> str:
+    """Downloads a file from a remote URL, saves it locally, and returns its local filename."""
+    logger.info(f"Attempting download of remote asset from: {url}")
+    try:
+        # Use a longer timeout for downloading large remote assets
+        async with httpx.AsyncClient(timeout=30.0) as client: 
+            resp = await client.get(url)
+            resp.raise_for_status() # Raise exception for 4xx/5xx status codes
+    except httpx.RequestError as e:
+        logger.error(f"Failed to download remote asset {url}: {e}")
+        # Use 502 Bad Gateway to indicate an issue with an upstream service (DigitalOcean)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to download asset from remote URL: {url}")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Remote asset returned status code {e.response.status_code} for {url}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Remote asset not found or inaccessible: {url}")
+        
+    # Generate a unique filename using a timestamp and the original file suffix
+    path_suffix = Path(url).name
+    # Ensure a proper suffix is used, default to .jpg if none found
+    if not Path(path_suffix).suffix:
+        path_suffix += ".jpg" 
 
+    filename = f"remote_{int(time.time()*1000)}_{path_suffix}"
+    
+    # Save the file to the GARMENT_TEMPLATES_DIR so the HF API can access it locally later.
+    local_path = directory / filename 
+    
+    with open(local_path, "wb") as f:
+        f.write(resp.content)
+    
+    logger.info(f"Remote asset successfully saved to: {local_path.name}")
+    return filename # Return the local filename
+# -----------------------------------
 # -----------------------------------------
 # 4. SYNCHRONOUS LOGGING FUNCTION
 # -----------------------------------------
