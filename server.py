@@ -193,8 +193,7 @@ def preview_garment(filename: str):
             return FileResponse(candidate)
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-
-
+# ... (Helper function download_remote_asset must be defined above this endpoint) ...
 @app.post("/garment/transform")
 async def garment_transform(
     sourceFile: UploadFile = File(..., description="The user's image file for face-swapping."),
@@ -214,24 +213,24 @@ async def garment_transform(
     if is_filename_provided and is_target_id_provided:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Only one of 'garment_filename' or 'target_category_id' can be provided."
+            detail="Only one of 'garment_filename' (local file) or 'target_category_id' (DB asset ID) can be provided."
         )
     elif not is_filename_provided and not is_target_id_provided:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Must provide either 'garment_filename' (local file) or 'target_category_id' (MongoDB asset ID)."
+            detail="Must provide either 'garment_filename' or 'target_category_id'."
         )
     
     target_value = None
 
-    # 2. Determine Target Garment (URL or Filename)
+    # 2. Determine Target Garment (Local Filename or Remote URL)
     if is_filename_provided:
         # OLD LOGIC: Use local filename directly (e.g., BloodSchoolgirl.png)
         target_value = garment_filename
         logger.info(f"Target determined: Local filename {target_value}")
 
     elif is_target_id_provided:
-        # NEW LOGIC: Look up URL in MongoDB
+        # NEW LOGIC: Look up URL in MongoDB, then DOWNLOAD IT.
         if _subcategories_col is None:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database lookup service is unavailable.")
         
@@ -244,28 +243,33 @@ async def garment_transform(
         subcat_doc = await asyncio.to_thread(
             _subcategories_col.find_one,
             {"asset_images._id": target_asset_oid},
-            {"asset_images.$": 1} # Projection to get the matched asset only
+            {"asset_images.$": 1}
         )
         
         if subcat_doc and subcat_doc.get('asset_images') and subcat_doc['asset_images']:
             target_url = subcat_doc['asset_images'][0]['url']
-            target_value = target_url # Use the fetched URL for the HF API target
-            logger.info(f"Target determined from DB: {target_url}")
+            
+            # --- CRITICAL STEP: DOWNLOAD THE REMOTE ASSET AND GET THE LOCAL FILENAME ---
+            local_filename = await download_remote_asset(target_url, GARMENT_TEMPLATES_DIR) 
+            target_value = local_filename # PASS THE LOCAL FILENAME TO HF
+            # --------------------------------------------------------------------------
+            
+            logger.info(f"Target determined and downloaded locally: {target_value}")
         else:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Garment asset ID {target_category_id} not found in DB.")
 
-    # 3. Prepare API Request
+    # 3. Prepare API Request (source image upload)
     file_content = await sourceFile.read()
     
     files = {
         "source": (sourceFile.filename, file_content, sourceFile.content_type)
     }
     data = {
-        # target_value is either the local filename or the fetched URL
+        # target_value is now guaranteed to be a local filename/reference
         "target": target_value 
     }
     
-    logger.info(f"Calling HF API with target: {target_value}")
+    logger.info(f"Calling HF API with local target reference: {target_value}")
 
     # 4. Call Hugging Face API
     try:
