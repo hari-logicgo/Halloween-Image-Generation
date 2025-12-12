@@ -225,7 +225,7 @@ async def garment_transform(
 
     # 2. Determine Target Garment (Local Filename or Remote URL)
     if is_filename_provided:
-        # OLD LOGIC: Use local filename directly (e.g., BloodSchoolgirl.png)
+        # OLD LOGIC: Use local filename directly
         target_value = garment_filename
         logger.info(f"Target determined: Local filename {target_value}")
 
@@ -239,22 +239,31 @@ async def garment_transform(
         except Exception:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid target_category_id format.")
 
-        # Blocking MongoDB read operation must be run in a separate thread
-        subcat_doc = await asyncio.to_thread(
-            _subcategories_col.find_one,
-            {"asset_images._id": target_asset_oid},
-            {"asset_images.$": 1}
-        )
+        try:
+            # Blocking MongoDB read operation must be run in a separate thread
+            subcat_doc = await asyncio.to_thread(
+                _subcategories_col.find_one,
+                {"asset_images._id": target_asset_oid},
+                {"asset_images.$": 1}
+            )
+        except Exception as e:
+            logger.error(f"MongoDB query failed for asset ID {target_category_id}: {e}")
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database query failed during asset lookup.")
         
         if subcat_doc and subcat_doc.get('asset_images') and subcat_doc['asset_images']:
             target_url = subcat_doc['asset_images'][0]['url']
             
-            # --- CRITICAL STEP: DOWNLOAD THE REMOTE ASSET AND GET THE LOCAL FILENAME ---
-            local_filename = await download_remote_asset(target_url, GARMENT_TEMPLATES_DIR) 
-            target_value = local_filename # PASS THE LOCAL FILENAME TO HF
-            # --------------------------------------------------------------------------
-            
-            logger.info(f"Target determined and downloaded locally: {target_value}")
+            try:
+                # --- CRITICAL NEW STEP: DOWNLOAD THE REMOTE ASSET ---
+                local_filename = await download_remote_asset(target_url, GARMENT_TEMPLATES_DIR) 
+                target_value = local_filename # PASS THE LOCAL FILENAME TO HF
+                # ----------------------------------------------------
+                logger.info(f"Target determined and downloaded locally: {target_value}")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error during remote asset download: {e}")
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to process remote asset.")
         else:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Garment asset ID {target_category_id} not found in DB.")
 
@@ -306,9 +315,13 @@ async def garment_transform(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invalid response format from external API.")
 
     # Download Image from HF
-    async with httpx.AsyncClient() as client:
-        img_resp = await client.get(hf_image_url)
-        img_resp.raise_for_status() # Raise an error for bad status codes
+    try:
+        async with httpx.AsyncClient() as client:
+            img_resp = await client.get(hf_image_url)
+            img_resp.raise_for_status() 
+    except Exception as e:
+        logger.error(f"Failed to download final image from HF: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve final processed image.")
 
     # Save Locally
     local_path = GARMENT_INPUT_DIR / filename
@@ -320,11 +333,9 @@ async def garment_transform(
     # 6. Conditional Media Click Logging
     if user_id and category_id:
         try:
-            # Validate IDs before logging
             ObjectId(user_id.strip())
             ObjectId(category_id.strip())
             
-            # Start the background logging task using create_task to prevent RuntimeWarning
             asyncio.create_task(
                 asyncio.to_thread(sync_log_media_click, user_id, category_id)
             )
