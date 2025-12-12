@@ -47,10 +47,7 @@ _media_clicks_col = None  # To log user activity
 
 try:
     # Use the URI provided by the user (or environment variable if available)
-    _admin_mongo_uri = os.getenv(
-        "MONGODB_ADMIN_URI", 
-        "mongodb+srv://darsh01logicgo_db_user:sqStkMn8n7jjx8Qr@selfie-beauty-camera.dllbn2q.mongodb.net/"
-    )
+    _admin_mongo_uri = os.getenv("MONGODB_ADMIN_URI")
     _admin_mongo_db = "adminPanel"
     
     logger.info(f"Attempting connection to Admin DB: {_admin_mongo_db}...") 
