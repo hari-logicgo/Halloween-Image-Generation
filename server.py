@@ -144,51 +144,67 @@ def sync_log_media_click(user_id_str: str, category_id_str: str):
         # ------------------------------------------------
         # STEP 2: DAILY COUNT LOGIC (CORRECT)
         # ------------------------------------------------
+       # ------------------------------------------------
+        # STEP 2: DAILY COUNT LOGIC (FIXED)
+        # ------------------------------------------------
         doc = _media_clicks_col.find_one(
             {"userId": user_oid},
             {"ai_edit_daily_count": 1}
         )
-
-        daily_entries = doc.get("ai_edit_daily_count", [])
+        
+        daily_entries = doc.get("ai_edit_daily_count", []) if doc else []
         daily_updates = []
-
+        
         if not daily_entries:
-            # ✅ FIRST EVER USAGE → ONLY TODAY
+            # First-ever usage → only today
             daily_updates.append({
                 "date": today_date,
                 "count": 1
             })
         else:
-            # Find last stored date
+            # Build a set of existing dates to avoid duplicates
+            existing_dates = {entry["date"].date() for entry in daily_entries}
             last_date = max(entry["date"] for entry in daily_entries)
-
+        
+            # Backfill all skipped days between last_date and today-1
             next_expected_date = last_date + timedelta(days=1)
-
-            # ✅ BACKFILL ONLY REAL GAPS
             while next_expected_date.date() < today_date.date():
-                daily_updates.append({
-                    "date": next_expected_date,
-                    "count": 0
-                })
+                if next_expected_date.date() not in existing_dates:
+                    daily_updates.append({
+                        "date": next_expected_date,
+                        "count": 0
+                    })
                 next_expected_date += timedelta(days=1)
-
-            # ✅ ADD TODAY IF MISSING
-            if last_date.date() != today_date.date():
+        
+            # Add today if not already present
+            if today_date.date() not in existing_dates:
                 daily_updates.append({
                     "date": today_date,
                     "count": 1
                 })
-
+        
+        # Push new entries if any
         if daily_updates:
             _media_clicks_col.update_one(
                 {"userId": user_oid},
-                {
-                    "$push": {
-                        "ai_edit_daily_count": {
-                            "$each": daily_updates
-                        }
-                    }
-                }
+                {"$push": {"ai_edit_daily_count": {"$each": daily_updates}}}
+            )
+        
+        # ------------------------------------------------
+        # STEP 2.5: SORT OLDEST → NEWEST AND TRIM TO 32 DAYS
+        # ------------------------------------------------
+        doc = _media_clicks_col.find_one({"userId": user_oid}, {"ai_edit_daily_count": 1})
+        daily_entries = doc.get("ai_edit_daily_count", []) if doc else []
+        
+        # Sort oldest first
+        daily_entries.sort(key=lambda x: x["date"])
+        
+        # Trim to last 32 entries
+        if len(daily_entries) > 32:
+            daily_entries = daily_entries[-32:]
+            _media_clicks_col.update_one(
+                {"userId": user_oid},
+                {"$set": {"ai_edit_daily_count": daily_entries}}
             )
 
         # ------------------------------------------------
@@ -242,92 +258,6 @@ def sync_log_media_click(user_id_str: str, category_id_str: str):
 
     except Exception as media_err:
         logger.error(f"MEDIA_CLICK LOGGING WRITE ERROR: {media_err}")
-# -----------------------------------------
-# 4. SYNCHRONOUS LOGGING FUNCTION
-# -----------------------------------------
-# def sync_log_media_click(user_id_str: str, category_id_str: str):
-#     if _media_clicks_col is None:
-#         logger.warning("sync_log_media_click called but MongoDB is not connected.")
-#         return
-
-#     try:
-#         user_oid = ObjectId(user_id_str.strip())
-#         category_oid = ObjectId(category_id_str.strip())
-#         now = datetime.utcnow()
-
-#         logger.info(
-#             f"Attempting background write for User:{user_id_str}, Category:{category_id_str}"
-#         )
-
-#         # ------------------------------------------------
-#         # STEP 1: Ensure user-level AI edit fields exist
-#         # ------------------------------------------------
-#         _media_clicks_col.update_one(
-#             { "userId": user_oid },
-#             {
-#                 "$setOnInsert": {
-#                     "userId": user_oid,
-#                     "createdAt": now,
-#                     "ai_edit_complete": 0,
-#                 },
-#                 "$set": {
-#                     "updatedAt": now,
-#                     "ai_edit_last_date": now,
-#                 },
-#             },
-#             upsert=True,
-#         )
-
-#         # Increment AI edit count (separate update = NO CONFLICT)
-#         _media_clicks_col.update_one(
-#             { "userId": user_oid },
-#             { "$inc": { "ai_edit_complete": 1 } },
-#         )
-
-#         # ------------------------------------------------
-#         # STEP 2: Update existing category click
-#         # ------------------------------------------------
-#         update_result = _media_clicks_col.update_one(
-#             {
-#                 "userId": user_oid,
-#                 "categories.categoryId": category_oid,
-#             },
-#             {
-#                 "$set": {
-#                     "updatedAt": now,
-#                     "categories.$.lastClickedAt": now,
-#                 },
-#                 "$inc": {
-#                     "categories.$.click_count": 1,
-#                 },
-#             },
-#         )
-
-#         # ------------------------------------------------
-#         # STEP 3: Push category if not exists
-#         # ------------------------------------------------
-#         if update_result.matched_count == 0:
-#             _media_clicks_col.update_one(
-#                 { "userId": user_oid },
-#                 {
-#                     "$set": { "updatedAt": now },
-#                     "$push": {
-#                         "categories": {
-#                             "categoryId": category_oid,
-#                             "click_count": 1,
-#                             "lastClickedAt": now,
-#                         }
-#                     },
-#                 },
-#             )
-
-#         logger.info(
-#             f"Media click logged for User {user_id_str} on Category {category_id_str}"
-#         )
-
-#     except Exception as media_err:
-#         logger.error(f"MEDIA_CLICK LOGGING WRITE ERROR: {media_err}")
-
 # -----------------------------------------
 # 5. FASTAPI APP SETUP AND MOUNTING
 # -----------------------------------------
