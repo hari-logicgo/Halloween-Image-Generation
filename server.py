@@ -8,7 +8,8 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Response, st
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 import httpx
-
+from PIL import Image
+import io
 # --- MongoDB Imports ---
 # Make sure to install: pip install pymongo "bson[cpython]"
 from bson.objectid import ObjectId
@@ -258,6 +259,49 @@ def sync_log_media_click(user_id_str: str, category_id_str: str):
 
     except Exception as media_err:
         logger.error(f"MEDIA_CLICK LOGGING WRITE ERROR: {media_err}")
+        
+MAX_COMPRESSED_SIZE = 2 * 1024 * 1024  # 2 MB
+MAX_DIMENSION = 1000  # 1000x1000 max
+def compress_image_file(
+    input_path,
+    output_path
+):
+    """
+    Compress image by:
+    - limiting dimensions <= 1000x1000
+    - reducing quality
+    - ensuring size <= ~2MB
+    """
+
+    img = Image.open(input_path).convert("RGB")
+
+    # Resize while keeping aspect ratio
+    img.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.LANCZOS)
+
+    quality = 85
+    buffer = io.BytesIO()
+
+    while quality >= 45:
+        buffer.seek(0)
+        buffer.truncate()
+
+        img.save(
+            buffer,
+            format="JPEG",  # JPEG gives best size control
+            quality=quality,
+            optimize=True,
+            progressive=True
+        )
+
+        if buffer.tell() <= MAX_COMPRESSED_SIZE:
+            break
+
+        quality -= 5
+
+    # Write compressed image to disk
+    with open(output_path, "wb") as f:
+        f.write(buffer.getvalue())
+        
 # -----------------------------------------
 # 5. FASTAPI APP SETUP AND MOUNTING
 # -----------------------------------------
@@ -466,6 +510,24 @@ async def garment_transform(
         f.write(img_resp.content)
     
     logger.info(f"Generated image saved locally: {filename}")
+    # ---------------------------------------------------------
+    # COMPRESS GENERATED IMAGE
+    # ---------------------------------------------------------
+    compressed_filename = filename.rsplit(".", 1)[0] + "_compressed.jpg"
+    compressed_path = GARMENT_INPUT_DIR / compressed_filename
+    
+    try:
+        compress_image_file(
+            input_path=local_path,
+            output_path=compressed_path
+        )
+        logger.info(f"Compressed image generated: {compressed_filename}")
+    except Exception as e:
+        logger.error(f"Image compression failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to compress generated image."
+        )
 
     # 6. Conditional Media Click Logging
     if user_id and category_id:
@@ -484,7 +546,11 @@ async def garment_transform(
     return {
         "status": "success",
         "preview_url": f"/preview/garment/{filename}",
-        "filename": filename
+        "filename": filename,
+        "Compressed_Image_URL": (
+            f"https://halloween-image-generation.onrender.com"
+            f"/preview/garment/{compressed_filename}"
+        )
     }
 
 
