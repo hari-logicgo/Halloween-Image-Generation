@@ -494,75 +494,96 @@ async def garment_transform(
             media_type=resp.headers.get("Content-Type")
         )
 
-    # 5. Process HF Response and Save Locally
+    # # 5. Process HF Response and Save Locally
+    # try:
+    #     hf_data = resp.json()
+    #     filename = hf_data["filename"]
+    #     hf_image_url = (
+    #         "https://logicgoinfotechspaces-halloweenfaceswap.hf.space"
+    #         + hf_data["preview_url"]
+    #     )
+    # except (KeyError, ValueError, TypeError) as e:
+    #     logger.error(f"Failed to parse or extract keys from HF JSON response: {e}")
+    #     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invalid response format from external API.")
+
+    # # Download Image from HF
+    # try:
+    #     async with httpx.AsyncClient() as client:
+    #         img_resp = await client.get(hf_image_url)
+    #         img_resp.raise_for_status() 
+    # except Exception as e:
+    #     logger.error(f"Failed to download final image from HF: {e}")
+    #     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve final processed image.")
+
+    # # Save Locally
+    # local_path = GARMENT_INPUT_DIR / filename
+    # with open(local_path, "wb") as f:
+    #     f.write(img_resp.content)
+    
+    # logger.info(f"Generated image saved locally: {filename}")
+    # # ---------------------------------------------------------
+    # # COMPRESS GENERATED IMAGE
+    # # ---------------------------------------------------------
+    # compressed_filename = filename.rsplit(".", 1)[0] + "_compressed.jpg"
+    # compressed_path = GARMENT_INPUT_DIR / compressed_filename
+    
+    # try:
+    #     compress_image_file(
+    #         input_path=local_path,
+    #         output_path=compressed_path
+    #     )
+    #     logger.info(f"Compressed image generated: {compressed_filename}")
+    # except Exception as e:
+    #     logger.error(f"Image compression failed: {e}")
+    #     raise HTTPException(
+    #         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    #         detail="Failed to compress generated image."
+    #     )
+
+    # # 6. Conditional Media Click Logging
+    # if user_id and category_id:
+    #     try:
+    #         ObjectId(user_id.strip())
+    #         ObjectId(category_id.strip())
+            
+    #         asyncio.create_task(
+    #             asyncio.to_thread(sync_log_media_click, user_id, category_id)
+    #         )
+    #     except Exception as log_err:
+    #         logger.warning(f"Skipping media click log due to invalid ID format or internal error: {log_err}")
+    #         pass
+
+    # 5. Parse FaceSwap Response (NEW FORMAT)
     try:
         hf_data = resp.json()
-        filename = hf_data["filename"]
-        hf_image_url = (
-            "https://logicgoinfotechspaces-halloweenfaceswap.hf.space"
-            + hf_data["preview_url"]
-        )
+        result_url = hf_data["result_url"]
+        compressed_url = hf_data["Compressed_Image_URL"]
     except (KeyError, ValueError, TypeError) as e:
-        logger.error(f"Failed to parse or extract keys from HF JSON response: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invalid response format from external API.")
-
-    # Download Image from HF
-    try:
-        async with httpx.AsyncClient() as client:
-            img_resp = await client.get(hf_image_url)
-            img_resp.raise_for_status() 
-    except Exception as e:
-        logger.error(f"Failed to download final image from HF: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve final processed image.")
-
-    # Save Locally
-    local_path = GARMENT_INPUT_DIR / filename
-    with open(local_path, "wb") as f:
-        f.write(img_resp.content)
-    
-    logger.info(f"Generated image saved locally: {filename}")
-    # ---------------------------------------------------------
-    # COMPRESS GENERATED IMAGE
-    # ---------------------------------------------------------
-    compressed_filename = filename.rsplit(".", 1)[0] + "_compressed.jpg"
-    compressed_path = GARMENT_INPUT_DIR / compressed_filename
-    
-    try:
-        compress_image_file(
-            input_path=local_path,
-            output_path=compressed_path
-        )
-        logger.info(f"Compressed image generated: {compressed_filename}")
-    except Exception as e:
-        logger.error(f"Image compression failed: {e}")
+        logger.error(f"Invalid FaceSwap API response: {e}, body={resp.text}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to compress generated image."
+            detail="Invalid response format from external API."
         )
 
-    # 6. Conditional Media Click Logging
-    if user_id and category_id:
-        try:
-            ObjectId(user_id.strip())
-            ObjectId(category_id.strip())
-            
-            asyncio.create_task(
-                asyncio.to_thread(sync_log_media_click, user_id, category_id)
-            )
-        except Exception as log_err:
-            logger.warning(f"Skipping media click log due to invalid ID format or internal error: {log_err}")
-            pass
 
     # 7. Return Final Response
+
     return {
         "status": "success",
-        "preview_url": f"/preview/garment/{filename}",
-        "filename": filename,
-        "Compressed_Image_URL": (
-            f"https://halloween-image-generation.onrender.com"
-            f"/preview/garment/{compressed_filename}"
-        )
+        "preview_url": result_url,
+        "filename": hf_data.get("result_key"),
+        "Compressed_Image_URL": compressed_url
     }
+
+    # return {
+    #     "status": "success",
+    #     "preview_url": f"/preview/garment/{filename}",
+    #     "filename": filename,
+    #     "Compressed_Image_URL": (
+    #         f"https://halloween-image-generation.onrender.com"
+    #         f"/preview/garment/{compressed_filename}"
+    #     )
+    # }
 
 
 
