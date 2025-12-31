@@ -32,8 +32,11 @@ GARMENT_INPUT_DIR = BASE_DIR / "garment_input"
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
 # Hugging Face API Configuration
-HF_API_URL = "https://logicgoinfotechspaces-halloweenfaceswap.hf.space/face-swap"
-HF_AUTH = "Bearer logicgo@123"
+# HF_API_URL = "https://logicgoinfotechspaces-halloweenfaceswap.hf.space/face-swap"
+# HF_AUTH = "Bearer logicgo@123"
+# NEW
+HF_API_URL = "https://logicgoinfotechspaces-faceswap.hf.space/face-swap"
+HF_AUTH = "Bearer logicgo_secret_123"
 
 # Ensure directories exist
 GARMENT_TEMPLATES_DIR.mkdir(exist_ok=True)
@@ -454,12 +457,20 @@ async def garment_transform(
     files = {
         "source": (sourceFile.filename, file_content, sourceFile.content_type)
     }
+    # data = {
+    #     # target_value is now guaranteed to be a local filename/reference
+    #     "target": target_value 
+    # }
     data = {
-        # target_value is now guaranteed to be a local filename/reference
-        "target": target_value 
+        "user_id": user_id,
+        "new_category_id": target_category_id,
+        "target_category_id": "" # mapping your category_id → new_category_id
     }
     
-    logger.info(f"Calling HF API with local target reference: {target_value}")
+    logger.info(
+    f"Calling FaceSwap API → new_category_id={target_category_id}, user_id={user_id}"
+    )
+
 
     # 4. Call Hugging Face API
     try:
