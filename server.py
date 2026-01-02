@@ -51,6 +51,7 @@ _media_clicks_col = None  # To log user activity
 
 try:
     # Use the URI provided by the user (or environment variable if available)
+    
     _admin_mongo_uri = os.getenv("MONGODB_ADMIN_URI")
     _admin_mongo_db = "adminPanel"
     
@@ -66,6 +67,51 @@ except Exception as e:
     _mongo_client = None
     _subcategories_col = None
     _media_clicks_col = None
+# -------------------------------
+# MONGODB CONNECTION FOR API LOGGING
+# -------------------------------
+_api_log_client = None
+_api_logs_col = None
+
+try:
+    _api_mongo_uri = os.getenv("MONGODB_API_URI")  # your separate URI
+    _api_db_name = "halloween_db"
+
+    _api_log_client = MongoClient(_api_mongo_uri, connect=False)
+    _api_logs_col = _api_log_client[_api_db_name]["api_logs"]
+    logger.info("MongoDB client established for API logging.")
+except Exception as e:
+    logger.error(f"FATAL: API Logging MongoDB connection failed: {e}")
+    _api_log_client = None
+    _api_logs_col = None
+    
+def log_api_call(
+    api: str,
+    status: str,
+    target: str = "",
+    response_time_ms: float = 0.0,
+    error: Optional[str] = None
+):
+    if _api_logs_col is None:
+        logger.warning("API logging skipped, MongoDB not connected.")
+        return
+
+    now = datetime.utcnow()
+    doc = {
+        "api": api,
+        "status": status,
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H:%M:%S"),
+        "response_time_ms": response_time_ms,
+        "target": target,
+        "error": error
+    }
+
+    try:
+        _api_logs_col.insert_one(doc)
+    except Exception as e:
+        logger.error(f"Failed to write API log: {e}")
+
 # --- NEW: REMOTE DOWNLOAD HELPER (Robust I/O Error Handling) ---
 async def download_remote_asset(url: str, directory: Path) -> str:
     """Downloads a file from a remote URL, saves it locally, and returns its local filename."""
@@ -378,6 +424,171 @@ def preview_garment(filename: str):
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
 
+# @app.post("/garment/transform")
+# async def garment_transform(
+#     sourceFile: UploadFile = File(..., description="The user's image file for face-swapping."),
+#     garment_filename: Optional[str] = Form(None),
+#     target_category_id: Optional[str] = Form(None),
+#     category_id: Optional[str] = Form(None),
+#     user_id: Optional[str] = Form(None)
+# ):
+#     # ------------------------------------------------------------
+#     # 1. Validation
+#     # ------------------------------------------------------------
+#     is_filename_provided = garment_filename is not None and garment_filename.strip()
+#     is_target_id_provided = target_category_id is not None and target_category_id.strip()
+
+#     if is_filename_provided and is_target_id_provided:
+#         raise HTTPException(
+#             status_code=400,
+#             detail="Only one of garment_filename or target_category_id allowed"
+#         )
+#     if not is_filename_provided and not is_target_id_provided:
+#         raise HTTPException(
+#             status_code=400,
+#             detail="Either garment_filename or target_category_id is required"
+#         )
+
+#     # ------------------------------------------------------------
+#     # 2. Resolve target garment (OLD + NEW logic)
+#     # ------------------------------------------------------------
+#     target_value = None
+
+#     if is_filename_provided:
+#         target_value = garment_filename
+
+#     else:
+#         if _subcategories_col is None:
+#             raise HTTPException(503, "Database unavailable")
+
+#         try:
+#             target_asset_oid = ObjectId(target_category_id.strip())
+#         except Exception:
+#             raise HTTPException(400, "Invalid target_category_id")
+
+#         subcat_doc = await asyncio.to_thread(
+#             _subcategories_col.find_one,
+#             {"asset_images._id": target_asset_oid},
+#             {"asset_images.$": 1}
+#         )
+
+#         if not subcat_doc or not subcat_doc.get("asset_images"):
+#             raise HTTPException(404, "Garment asset not found")
+
+#         target_url = subcat_doc["asset_images"][0]["url"]
+
+#         # download garment template locally
+#         target_value = await download_remote_asset(
+#             target_url,
+#             GARMENT_TEMPLATES_DIR
+#         )
+
+#     # ------------------------------------------------------------
+#     # 3. Prepare FaceSwap request
+#     # ------------------------------------------------------------
+#     source_bytes = await sourceFile.read()
+
+#     files = {
+#         "source": (sourceFile.filename, source_bytes, sourceFile.content_type)
+#     }
+
+#     data = {
+#         "user_id": user_id,
+#         "new_category_id": target_category_id or "",
+#         "target_category_id": ""
+#     }
+
+#     # ------------------------------------------------------------
+#     # 4. Call FaceSwap API
+#     # ------------------------------------------------------------
+#     try:
+#         async with httpx.AsyncClient(timeout=120) as client:
+#             resp = await client.post(
+#                 HF_API_URL,
+#                 headers={"Authorization": HF_AUTH},
+#                 files=files,
+#                 data=data
+#             )
+#     except httpx.RequestError as e:
+#         logger.error(f"FaceSwap request failed: {e}")
+#         raise HTTPException(504, "FaceSwap API timeout")
+
+#     if resp.status_code != 200:
+#         logger.error(f"FaceSwap error {resp.status_code}: {resp.text}")
+#         return Response(
+#             content=resp.content,
+#             status_code=resp.status_code,
+#             media_type=resp.headers.get("Content-Type")
+#         )
+
+#     # ------------------------------------------------------------
+#     # 5. Parse NEW FaceSwap response
+#     # ------------------------------------------------------------
+#     try:
+#         hf_data = resp.json()
+#         result_url = hf_data["result_url"]
+#         compressed_url = hf_data["Compressed_Image_URL"]
+#     except Exception as e:
+#         logger.error(f"Invalid FaceSwap response: {resp.text}")
+#         raise HTTPException(500, "Invalid response format from external API")
+
+#     # ------------------------------------------------------------
+#     # 6. DOWNLOAD RESULT IMAGE LOCALLY
+#     # ------------------------------------------------------------
+#     import uuid
+#     from urllib.parse import urlparse
+#     import os
+
+#     ext = os.path.splitext(urlparse(result_url).path)[1] or ".png"
+#     filename = f"{uuid.uuid4()}{ext}"
+
+#     local_path = GARMENT_INPUT_DIR / filename
+
+#     async with httpx.AsyncClient(timeout=60) as client:
+#         img_resp = await client.get(result_url)
+#         img_resp.raise_for_status()
+
+#     with open(local_path, "wb") as f:
+#         f.write(img_resp.content)
+
+#     # ------------------------------------------------------------
+#     # 7. DOWNLOAD COMPRESSED IMAGE LOCALLY
+#     # ------------------------------------------------------------
+#     compressed_filename = filename.rsplit(".", 1)[0] + "_compressed.jpg"
+#     compressed_path = GARMENT_INPUT_DIR / compressed_filename
+
+#     async with httpx.AsyncClient(timeout=60) as client:
+#         comp_resp = await client.get(compressed_url)
+#         comp_resp.raise_for_status()
+
+#     with open(compressed_path, "wb") as f:
+#         f.write(comp_resp.content)
+
+#     # ------------------------------------------------------------
+#     # 8. Optional logging (unchanged)
+#     # ------------------------------------------------------------
+#     if user_id and category_id:
+#         try:
+#             asyncio.create_task(
+#                 asyncio.to_thread(sync_log_media_click, user_id, category_id)
+#             )
+#         except Exception:
+#             pass
+    
+
+#     # ------------------------------------------------------------
+#     # 9. RETURN OLD RESPONSE FORMAT (ANDROID SAFE)
+#     # ------------------------------------------------------------
+#     return {
+#         "status": "success",
+#         "preview_url": f"/preview/garment/{filename}",
+#         "filename": filename,
+#         "Compressed_Image_URL": (
+#             f"https://halloween-image-generation.onrender.com"
+#             f"/preview/garment/{compressed_filename}"
+#         )
+#     }
+
 @app.post("/garment/transform")
 async def garment_transform(
     sourceFile: UploadFile = File(..., description="The user's image file for face-swapping."),
@@ -386,76 +597,72 @@ async def garment_transform(
     category_id: Optional[str] = Form(None),
     user_id: Optional[str] = Form(None)
 ):
-    # ------------------------------------------------------------
-    # 1. Validation
-    # ------------------------------------------------------------
-    is_filename_provided = garment_filename is not None and garment_filename.strip()
-    is_target_id_provided = target_category_id is not None and target_category_id.strip()
-
-    if is_filename_provided and is_target_id_provided:
-        raise HTTPException(
-            status_code=400,
-            detail="Only one of garment_filename or target_category_id allowed"
-        )
-    if not is_filename_provided and not is_target_id_provided:
-        raise HTTPException(
-            status_code=400,
-            detail="Either garment_filename or target_category_id is required"
-        )
-
-    # ------------------------------------------------------------
-    # 2. Resolve target garment (OLD + NEW logic)
-    # ------------------------------------------------------------
+    import time
+    start_time = time.perf_counter()
     target_value = None
 
-    if is_filename_provided:
-        target_value = garment_filename
-
-    else:
-        if _subcategories_col is None:
-            raise HTTPException(503, "Database unavailable")
-
-        try:
-            target_asset_oid = ObjectId(target_category_id.strip())
-        except Exception:
-            raise HTTPException(400, "Invalid target_category_id")
-
-        subcat_doc = await asyncio.to_thread(
-            _subcategories_col.find_one,
-            {"asset_images._id": target_asset_oid},
-            {"asset_images.$": 1}
-        )
-
-        if not subcat_doc or not subcat_doc.get("asset_images"):
-            raise HTTPException(404, "Garment asset not found")
-
-        target_url = subcat_doc["asset_images"][0]["url"]
-
-        # download garment template locally
-        target_value = await download_remote_asset(
-            target_url,
-            GARMENT_TEMPLATES_DIR
-        )
-
-    # ------------------------------------------------------------
-    # 3. Prepare FaceSwap request
-    # ------------------------------------------------------------
-    source_bytes = await sourceFile.read()
-
-    files = {
-        "source": (sourceFile.filename, source_bytes, sourceFile.content_type)
-    }
-
-    data = {
-        "user_id": user_id,
-        "new_category_id": target_category_id or "",
-        "target_category_id": ""
-    }
-
-    # ------------------------------------------------------------
-    # 4. Call FaceSwap API
-    # ------------------------------------------------------------
     try:
+        # ------------------------------------------------------------
+        # 1. Validation
+        # ------------------------------------------------------------
+        is_filename_provided = garment_filename is not None and garment_filename.strip()
+        is_target_id_provided = target_category_id is not None and target_category_id.strip()
+
+        if is_filename_provided and is_target_id_provided:
+            raise HTTPException(
+                status_code=400,
+                detail="Only one of garment_filename or target_category_id allowed"
+            )
+        if not is_filename_provided and not is_target_id_provided:
+            raise HTTPException(
+                status_code=400,
+                detail="Either garment_filename or target_category_id is required"
+            )
+
+        # ------------------------------------------------------------
+        # 2. Resolve target garment (local or remote)
+        # ------------------------------------------------------------
+        if is_filename_provided:
+            target_value = garment_filename
+        else:
+            if _subcategories_col is None:
+                raise HTTPException(503, "Database unavailable")
+
+            try:
+                target_asset_oid = ObjectId(target_category_id.strip())
+            except Exception:
+                raise HTTPException(400, "Invalid target_category_id")
+
+            subcat_doc = await asyncio.to_thread(
+                _subcategories_col.find_one,
+                {"asset_images._id": target_asset_oid},
+                {"asset_images.$": 1}
+            )
+
+            if not subcat_doc or not subcat_doc.get("asset_images"):
+                raise HTTPException(404, "Garment asset not found")
+
+            target_url = subcat_doc["asset_images"][0]["url"]
+            # Download garment template locally
+            target_value = await download_remote_asset(
+                target_url,
+                GARMENT_TEMPLATES_DIR
+            )
+
+        # ------------------------------------------------------------
+        # 3. Prepare FaceSwap request
+        # ------------------------------------------------------------
+        source_bytes = await sourceFile.read()
+        files = {"source": (sourceFile.filename, source_bytes, sourceFile.content_type)}
+        data = {
+            "user_id": user_id,
+            "new_category_id": target_category_id or "",
+            "target_category_id": ""
+        }
+
+        # ------------------------------------------------------------
+        # 4. Call FaceSwap API
+        # ------------------------------------------------------------
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 HF_API_URL,
@@ -463,456 +670,111 @@ async def garment_transform(
                 files=files,
                 data=data
             )
-    except httpx.RequestError as e:
-        logger.error(f"FaceSwap request failed: {e}")
-        raise HTTPException(504, "FaceSwap API timeout")
 
-    if resp.status_code != 200:
-        logger.error(f"FaceSwap error {resp.status_code}: {resp.text}")
-        return Response(
-            content=resp.content,
-            status_code=resp.status_code,
-            media_type=resp.headers.get("Content-Type")
-        )
+        if resp.status_code != 200:
+            end_time = time.perf_counter()
+            response_time_ms = (end_time - start_time) * 1000
+            # Log failure
+            log_api_call(
+                api="/garment/transform",
+                status="failure",
+                target=target_value,
+                response_time_ms=response_time_ms,
+                error=f"{resp.status_code}: {resp.text}"
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type=resp.headers.get("Content-Type")
+            )
 
-    # ------------------------------------------------------------
-    # 5. Parse NEW FaceSwap response
-    # ------------------------------------------------------------
-    try:
+        # ------------------------------------------------------------
+        # 5. Parse FaceSwap response
+        # ------------------------------------------------------------
         hf_data = resp.json()
         result_url = hf_data["result_url"]
         compressed_url = hf_data["Compressed_Image_URL"]
-    except Exception as e:
-        logger.error(f"Invalid FaceSwap response: {resp.text}")
-        raise HTTPException(500, "Invalid response format from external API")
 
-    # ------------------------------------------------------------
-    # 6. DOWNLOAD RESULT IMAGE LOCALLY
-    # ------------------------------------------------------------
-    import uuid
-    from urllib.parse import urlparse
-    import os
+        # ------------------------------------------------------------
+        # 6. Download result image locally
+        # ------------------------------------------------------------
+        import uuid
+        from urllib.parse import urlparse
+        import os
 
-    ext = os.path.splitext(urlparse(result_url).path)[1] or ".png"
-    filename = f"{uuid.uuid4()}{ext}"
+        ext = os.path.splitext(urlparse(result_url).path)[1] or ".png"
+        filename = f"{uuid.uuid4()}{ext}"
+        local_path = GARMENT_INPUT_DIR / filename
 
-    local_path = GARMENT_INPUT_DIR / filename
+        async with httpx.AsyncClient(timeout=60) as client:
+            img_resp = await client.get(result_url)
+            img_resp.raise_for_status()
+        with open(local_path, "wb") as f:
+            f.write(img_resp.content)
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        img_resp = await client.get(result_url)
-        img_resp.raise_for_status()
+        # ------------------------------------------------------------
+        # 7. Download compressed image locally
+        # ------------------------------------------------------------
+        compressed_filename = filename.rsplit(".", 1)[0] + "_compressed.jpg"
+        compressed_path = GARMENT_INPUT_DIR / compressed_filename
 
-    with open(local_path, "wb") as f:
-        f.write(img_resp.content)
+        async with httpx.AsyncClient(timeout=60) as client:
+            comp_resp = await client.get(compressed_url)
+            comp_resp.raise_for_status()
+        with open(compressed_path, "wb") as f:
+            f.write(comp_resp.content)
 
-    # ------------------------------------------------------------
-    # 7. DOWNLOAD COMPRESSED IMAGE LOCALLY
-    # ------------------------------------------------------------
-    compressed_filename = filename.rsplit(".", 1)[0] + "_compressed.jpg"
-    compressed_path = GARMENT_INPUT_DIR / compressed_filename
+        # ------------------------------------------------------------
+        # 8. Optional media_click logging
+        # ------------------------------------------------------------
+        if user_id and category_id:
+            try:
+                asyncio.create_task(
+                    asyncio.to_thread(sync_log_media_click, user_id, category_id)
+                )
+            except Exception:
+                pass
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        comp_resp = await client.get(compressed_url)
-        comp_resp.raise_for_status()
-
-    with open(compressed_path, "wb") as f:
-        f.write(comp_resp.content)
-
-    # ------------------------------------------------------------
-    # 8. Optional logging (unchanged)
-    # ------------------------------------------------------------
-    if user_id and category_id:
-        try:
-            asyncio.create_task(
-                asyncio.to_thread(sync_log_media_click, user_id, category_id)
-            )
-        except Exception:
-            pass
-
-    # ------------------------------------------------------------
-    # 9. RETURN OLD RESPONSE FORMAT (ANDROID SAFE)
-    # ------------------------------------------------------------
-    return {
-        "status": "success",
-        "preview_url": f"/preview/garment/{filename}",
-        "filename": filename,
-        "Compressed_Image_URL": (
-            f"https://halloween-image-generation.onrender.com"
-            f"/preview/garment/{compressed_filename}"
+        # ------------------------------------------------------------
+        # 9. Log success to API logs
+        # ------------------------------------------------------------
+        end_time = time.perf_counter()
+        response_time_ms = (end_time - start_time) * 1000
+        log_api_call(
+            api="/garment/transform",
+            status="success",
+            target=filename,
+            response_time_ms=response_time_ms
         )
-    }
 
+        # ------------------------------------------------------------
+        # 10. Return response
+        # ------------------------------------------------------------
+        return {
+            "status": "success",
+            "preview_url": f"/preview/garment/{filename}",
+            "filename": filename,
+            "Compressed_Image_URL": (
+                f"https://halloween-image-generation.onrender.com"
+                f"/preview/garment/{compressed_filename}"
+            )
+        }
+
+    except Exception as e:
+        # ------------------------------------------------------------
+        # 11. Log failure to API logs
+        # ------------------------------------------------------------
+        end_time = time.perf_counter()
+        response_time_ms = (end_time - start_time) * 1000
+        log_api_call(
+            api="/garment/transform",
+            status="failure",
+            target=target_value or "",
+            response_time_ms=response_time_ms,
+            error=str(e)
+        )
+        # Raise HTTP exception
+        raise HTTPException(status_code=500, detail=str(e))
 
-# ... (Helper function download_remote_asset must be defined above this endpoint) ...
-# @app.post("/garment/transform")
-# async def garment_transform(
-#     sourceFile: UploadFile = File(..., description="The user's image file for face-swapping."),
-#     # If provided, target is a local filename (OLD LOGIC)
-#     garment_filename: Optional[str] = Form(None), 
-#     # If provided, target is a MongoDB asset ID (NEW LOGIC)
-#     target_category_id: Optional[str] = Form(None), 
-#     # Optional Subcategory ID for logging
-#     category_id: Optional[str] = Form(None), 
-#     # Optional User ID for logging
-#     user_id: Optional[str] = Form(None) 
-# ):
-#     # 1. Mutual Exclusion and Input Validation
-#     is_filename_provided = garment_filename is not None and garment_filename.strip()
-#     is_target_id_provided = target_category_id is not None and target_category_id.strip()
 
-#     if is_filename_provided and is_target_id_provided:
-#         raise HTTPException(
-#             status_code=status.HTTP_400_BAD_REQUEST, 
-#             detail="Only one of 'garment_filename' (local file) or 'target_category_id' (DB asset ID) can be provided."
-#         )
-#     elif not is_filename_provided and not is_target_id_provided:
-#         raise HTTPException(
-#             status_code=status.HTTP_400_BAD_REQUEST, 
-#             detail="Must provide either 'garment_filename' or 'target_category_id'."
-#         )
-    
-#     target_value = None
 
-#     # 2. Determine Target Garment (Local Filename or Remote URL)
-#     if is_filename_provided:
-#         # OLD LOGIC: Use local filename directly
-#         target_value = garment_filename
-#         logger.info(f"Target determined: Local filename {target_value}")
-
-#     elif is_target_id_provided:
-#         # NEW LOGIC: Look up URL in MongoDB, then DOWNLOAD IT.
-#         if _subcategories_col is None:
-#             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database lookup service is unavailable.")
-        
-#         try:
-#             target_asset_oid = ObjectId(target_category_id.strip())
-#         except Exception:
-#             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid target_category_id format.")
-
-#         try:
-#             # Blocking MongoDB read operation must be run in a separate thread
-#             subcat_doc = await asyncio.to_thread(
-#                 _subcategories_col.find_one,
-#                 {"asset_images._id": target_asset_oid},
-#                 {"asset_images.$": 1}
-#             )
-#         except Exception as e:
-#             logger.error(f"MongoDB query failed for asset ID {target_category_id}: {e}")
-#             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database query failed during asset lookup.")
-        
-#         if subcat_doc and subcat_doc.get('asset_images') and subcat_doc['asset_images']:
-#             target_url = subcat_doc['asset_images'][0]['url']
-            
-#             try:
-#                 # --- CRITICAL NEW STEP: DOWNLOAD THE REMOTE ASSET ---
-#                 local_filename = await download_remote_asset(target_url, GARMENT_TEMPLATES_DIR) 
-#                 target_value = local_filename # PASS THE LOCAL FILENAME TO HF
-#                 # ----------------------------------------------------
-#                 logger.info(f"Target determined and downloaded locally: {target_value}")
-#             except HTTPException:
-#                 raise
-#             except Exception as e:
-#                 logger.error(f"Unexpected error during remote asset download: {e}")
-#                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to process remote asset.")
-#         else:
-#             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Garment asset ID {target_category_id} not found in DB.")
-
-#     # 3. Prepare API Request (source image upload)
-#     file_content = await sourceFile.read()
-    
-#     files = {
-#         "source": (sourceFile.filename, file_content, sourceFile.content_type)
-#     }
-#     # data = {
-#     #     # target_value is now guaranteed to be a local filename/reference
-#     #     "target": target_value 
-#     # }
-#     data = {
-#         "user_id": user_id,
-#         "new_category_id": target_category_id,
-#         "target_category_id": "" # mapping your category_id → new_category_id
-#     }
-    
-#     logger.info(
-#     f"Calling FaceSwap API → new_category_id={target_category_id}, user_id={user_id}"
-#     )
-
-
-#     # 4. Call Hugging Face API
-#     try:
-#         async with httpx.AsyncClient(timeout=120.0) as client:
-#             resp = await client.post(
-#                 HF_API_URL,
-#                 headers={"Authorization": HF_AUTH},
-#                 files=files,
-#                 data=data
-#             )
-#     except httpx.RequestError as e:
-#         logger.error(f"HF API network error: {e}")
-#         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="External API request failed due to timeout or network error.")
-
-
-#     if resp.status_code != 200:
-#         logger.error(f"HF API failed with status {resp.status_code}: {resp.text}")
-#         return Response(
-#             content=resp.content,
-#             status_code=resp.status_code,
-#             media_type=resp.headers.get("Content-Type")
-#         )
-
-#     # # 5. Process HF Response and Save Locally
-#     # try:
-#     #     hf_data = resp.json()
-#     #     filename = hf_data["filename"]
-#     #     hf_image_url = (
-#     #         "https://logicgoinfotechspaces-halloweenfaceswap.hf.space"
-#     #         + hf_data["preview_url"]
-#     #     )
-#     # except (KeyError, ValueError, TypeError) as e:
-#     #     logger.error(f"Failed to parse or extract keys from HF JSON response: {e}")
-#     #     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Invalid response format from external API.")
-
-#     # # Download Image from HF
-#     # try:
-#     #     async with httpx.AsyncClient() as client:
-#     #         img_resp = await client.get(hf_image_url)
-#     #         img_resp.raise_for_status() 
-#     # except Exception as e:
-#     #     logger.error(f"Failed to download final image from HF: {e}")
-#     #     raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve final processed image.")
-
-#     # # Save Locally
-#     # local_path = GARMENT_INPUT_DIR / filename
-#     # with open(local_path, "wb") as f:
-#     #     f.write(img_resp.content)
-    
-#     # logger.info(f"Generated image saved locally: {filename}")
-#     # # ---------------------------------------------------------
-#     # # COMPRESS GENERATED IMAGE
-#     # # ---------------------------------------------------------
-#     # compressed_filename = filename.rsplit(".", 1)[0] + "_compressed.jpg"
-#     # compressed_path = GARMENT_INPUT_DIR / compressed_filename
-    
-#     # try:
-#     #     compress_image_file(
-#     #         input_path=local_path,
-#     #         output_path=compressed_path
-#     #     )
-#     #     logger.info(f"Compressed image generated: {compressed_filename}")
-#     # except Exception as e:
-#     #     logger.error(f"Image compression failed: {e}")
-#     #     raise HTTPException(
-#     #         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#     #         detail="Failed to compress generated image."
-#     #     )
-
-#     # # 6. Conditional Media Click Logging
-#     # if user_id and category_id:
-#     #     try:
-#     #         ObjectId(user_id.strip())
-#     #         ObjectId(category_id.strip())
-            
-#     #         asyncio.create_task(
-#     #             asyncio.to_thread(sync_log_media_click, user_id, category_id)
-#     #         )
-#     #     except Exception as log_err:
-#     #         logger.warning(f"Skipping media click log due to invalid ID format or internal error: {log_err}")
-#     #         pass
-
-#     # 5. Parse FaceSwap Response (NEW FORMAT)
-#     try:
-#         hf_data = resp.json()
-#         result_url = hf_data["result_url"]
-#         compressed_url = hf_data["Compressed_Image_URL"]
-#     except (KeyError, ValueError, TypeError) as e:
-#         logger.error(f"Invalid FaceSwap API response: {e}, body={resp.text}")
-#         raise HTTPException(
-#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#             detail="Invalid response format from external API."
-#         )
-
-
-#     # 7. Return Final Response
-
-#     return {
-#         "status": "success",
-#         "preview_url": result_url,
-#         "filename": hf_data.get("result_key"),
-#         "Compressed_Image_URL": compressed_url
-#     }
-
-    # return {
-    #     "status": "success",
-    #     "preview_url": f"/preview/garment/{filename}",
-    #     "filename": filename,
-    #     "Compressed_Image_URL": (
-    #         f"https://halloween-image-generation.onrender.com"
-    #         f"/preview/garment/{compressed_filename}"
-    #     )
-    # }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ... old code 
-
-
-
-# import os
-# from pathlib import Path
-# from typing import List, Dict
-
-# from fastapi import FastAPI, HTTPException
-# from fastapi.responses import FileResponse, Response
-# from fastapi.staticfiles import StaticFiles
-# from fastapi import UploadFile, File, Form
-# import httpx
-
-# app = FastAPI(title="Halloween Image API - Filesystem Mode")
-
-# # Base directory
-# BASE_DIR = Path(__file__).resolve().parent
-
-# # Directories (spaces fixed)
-# GARMENT_TEMPLATES_DIR = BASE_DIR / "Halloween Dress"
-# GARMENT_INPUT_DIR = BASE_DIR / "garment_input"
-
-# ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-
-# # -----------------------------------------
-# # Ensure directories exist (avoids crashes)
-# # -----------------------------------------
-# GARMENT_TEMPLATES_DIR.mkdir(exist_ok=True)
-# GARMENT_INPUT_DIR.mkdir(exist_ok=True)
-
-# # -----------------------------------------
-# # Safe mount: only mount folder if it exists
-# # -----------------------------------------
-# if GARMENT_TEMPLATES_DIR.exists():
-#     app.mount(
-#         "/garment_templates",
-#         StaticFiles(directory=str(GARMENT_TEMPLATES_DIR)),
-#         name="garment_templates"
-#     )
-
-# if GARMENT_INPUT_DIR.exists():
-#     app.mount(
-#         "/garment_input",
-#         StaticFiles(directory=str(GARMENT_INPUT_DIR)),
-#         name="garment_input"
-#     )
-
-
-# # Helper to list images
-# def list_folder_images(directory: Path) -> List[Dict[str, str]]:
-#     items: List[Dict[str, str]] = []
-
-#     if directory.exists():
-#         for p in sorted(directory.iterdir()):
-#             if p.is_file() and p.suffix.lower() in ALLOWED_EXTS:
-#                 items.append({
-#                     "filename": p.name,
-#                     "url": f"/garment_templates/{p.name}"
-#                 })
-
-#     return items
-
-
-# @app.get("/health")
-# def health() -> Dict[str, object]:
-#     return {
-#         "status": "healthy",
-#         "source": "filesystem",
-#         "templates_exists": GARMENT_TEMPLATES_DIR.exists(),
-#         "input_exists": GARMENT_INPUT_DIR.exists(),
-#     }
-
-
-# @app.get("/garment/list")
-# def garment_list(limit: int = 10) -> Dict[str, List[Dict[str, str]]]:
-#     items: List[Dict[str, str]] = []
-#     items.extend(list_folder_images(GARMENT_TEMPLATES_DIR))
-#     items.extend(list_folder_images(GARMENT_INPUT_DIR))
-#     return {"garments": items[:limit]}
-
-
-# @app.get("/preview/garment/{filename}")
-# def preview_garment(filename: str):
-#     for directory in (GARMENT_TEMPLATES_DIR, GARMENT_INPUT_DIR):
-#         candidate = directory / filename
-#         if candidate.exists():
-#             return FileResponse(candidate)
-
-#     raise HTTPException(status_code=404, detail="File not found")
-
-
-# # -------------------------------
-# # NEW: POST /garment/transform (async)
-# # -------------------------------
-# HF_API_URL = "https://logicgoinfotechspaces-halloweenfaceswap.hf.space/face-swap"
-# HF_AUTH = "Bearer logicgo@123"
-
-# @app.post("/garment/transform")
-# async def garment_transform(
-#     sourceFile: UploadFile = File(...),
-#     garment_filename: str = Form(...)
-# ):
-#     file_content = await sourceFile.read()
-
-#     files = {
-#         "source": (sourceFile.filename, file_content, sourceFile.content_type)
-#     }
-#     data = {
-#         "target": garment_filename
-#     }
-
-#     async with httpx.AsyncClient(timeout=120.0) as client:
-#         resp = await client.post(
-#             HF_API_URL,
-#             headers={"Authorization": HF_AUTH},
-#             files=files,
-#             data=data
-#         )
-
-#     if resp.status_code != 200:
-#         return Response(
-#             content=resp.content,
-#             status_code=resp.status_code,
-#             media_type=resp.headers.get("Content-Type")
-#         )
-
-#     # ✅ HF RETURNS JSON WITH preview_url & filename
-#     hf_data = resp.json()
-#     filename = hf_data["filename"]
-
-#     # ✅ DOWNLOAD IMAGE FROM HF
-#     hf_image_url = (
-#         "https://logicgoinfotechspaces-halloweenfaceswap.hf.space"
-#         + hf_data["preview_url"]
-#     )
-
-#     async with httpx.AsyncClient() as client:
-#         img_resp = await client.get(hf_image_url)
-
-#     # ✅ SAVE LOCALLY SO /preview WORKS
-#     local_path = GARMENT_INPUT_DIR / filename
-#     with open(local_path, "wb") as f:
-#         f.write(img_resp.content)
-
-#     # ✅ RETURN SAME FORMAT YOU WANT
-#     return {
-#         "status": "success",
-#         "preview_url": f"/preview/garment/{filename}",
-#         "filename": filename
-#     }
